@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spark Screenshot Renderer</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #000;
+        }
+        #canvas {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+                "@sparkjsdev/spark": "https://cdn.jsdelivr.net/npm/@sparkjsdev/spark@latest/dist/spark.module.js"
+            }
+        }
+    </script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { SplatMesh } from '@sparkjsdev/spark';
+
+        // Get parameters from URL
+        const params = new URLSearchParams(window.location.search);
+        const splatPath = params.get('splat');
+        const width = parseInt(params.get('width') || '1200');
+        const height = parseInt(params.get('height') || '800');
+        const cameraPos = params.get('cameraPosition') || '0,0,5';
+        const lookAt = params.get('lookAt') || '0,0,0';
+        const fov = parseFloat(params.get('fov') || '75');
+        const near = parseFloat(params.get('near') || '0.1');
+        const far = parseFloat(params.get('far') || '1000');
+        const noSh = params.get('noSh') === 'true';
+        const colorSpace = params.get('colorSpace') || 'srgb';
+        const backgroundColor = params.get('backgroundColor') || '0,0,0';
+
+        if (!splatPath) {
+            window.renderComplete = false;
+            window.renderError = 'No splat file specified';
+            throw new Error('No splat file specified');
+        }
+
+        // Parse camera position and look-at
+        const parseCameraVector = (str) => {
+            const parts = str.split(',').map(s => parseFloat(s.trim()));
+            return new THREE.Vector3(parts[0], parts[1], parts[2]);
+        };
+
+        // Parse background color from RGB (0-255) to THREE.Color
+        const parseBackgroundColor = (str) => {
+            const parts = str.split(',').map(s => parseInt(s.trim()));
+            return new THREE.Color(parts[0] / 255, parts[1] / 255, parts[2] / 255);
+        };
+
+        const cameraPosition = parseCameraVector(cameraPos);
+        const lookAtPosition = parseCameraVector(lookAt);
+        const bgColor = parseBackgroundColor(backgroundColor);
+
+        // Scene setup
+        const scene = new THREE.Scene();
+        scene.background = bgColor;
+        const camera = new THREE.PerspectiveCamera(fov, width / height, near, far);
+        camera.position.copy(cameraPosition);
+        camera.lookAt(lookAtPosition);
+
+        const renderer = new THREE.WebGLRenderer({
+            antialias: true,
+            preserveDrawingBuffer: true
+        });
+        renderer.setSize(width, height);
+
+        // Set output color space
+        if (colorSpace === 'linear') {
+            renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+        } else {
+            renderer.outputColorSpace = THREE.SRGBColorSpace;
+        }
+
+        document.body.appendChild(renderer.domElement);
+
+        // Load splat
+        let splatMesh;
+        try {
+            splatMesh = new SplatMesh({ url: splatPath });
+
+            // Disable spherical harmonics if requested
+            if (noSh) {
+                splatMesh.maxSh = 0;
+                splatMesh.updateGenerator();
+            }
+
+            scene.add(splatMesh);
+
+            // Wait for splat to load
+            let loadCheckInterval;
+            let frameCount = 0;
+            const maxFrames = 300; // 5 seconds at 60fps
+
+            loadCheckInterval = setInterval(() => {
+                frameCount++;
+
+                // Render the scene
+                renderer.render(scene, camera);
+
+                // Check if enough frames have passed (assuming loaded)
+                if (frameCount > 60) { // Wait at least 1 second
+                    window.renderComplete = true;
+                    clearInterval(loadCheckInterval);
+                }
+
+                if (frameCount > maxFrames) {
+                    window.renderComplete = true;
+                    window.renderError = 'Timeout';
+                    clearInterval(loadCheckInterval);
+                }
+            }, 16); // ~60fps
+
+        } catch (error) {
+            window.renderComplete = false;
+            window.renderError = error.message;
+            console.error('Error loading splat:', error);
+        }
+
+        // Expose for debugging
+        window.scene = scene;
+        window.camera = camera;
+        window.renderer = renderer;
+    </script>
+</body>
+</html>
