@@ -48,17 +48,50 @@ spark-screenshot --splat <path-to-splat-file> [options]
 
 ### Options
 
-- `-s, --splat <path>` - Path to splat file (required)
-- `-w, --width <number>` - Width of the screenshot (default: 1280)
-- `-h, --height <number>` - Height of the screenshot (default: 800)
-- `-p, --camera-position <x,y,z>` - Camera position (default: 0,0,5)
-- `-l, --camera-look-at <x,y,z>` - Camera look-at target (default: 0,0,0)
-- `-f, --fov <number>` - Vertical field of view in degrees (default: 75)
+- `--splat <path>` - Path to splat file (.splat, .ply, .spz) to render
+- `--config <path>` - Path to JSON configuration file
+- `--background <rgba>` - Background color in RGBA format (e.g., 0,0,0,1 for black) (default: 0,0,0,1)
+- `--width <number>` - Width of the output image (default: 1024)
+- `--height <number>` - Height of the output image (default: 768)
+- `--output <path>` - Output PNG file path (default: output.png)
+- `--model-position <x,y,z>` - Model position in x,y,z format (e.g., 0,0,0)
+- `--camera-position <x,y,z>` - Camera position in x,y,z format (e.g., 0,0,1.5)
+- `--camera-lookat <x,y,z>` - Camera look-at target in x,y,z format (e.g., 0,0,0)
+- `--camera-rotation <values>` - Camera rotation as quaternion (x,y,z,w) or 3x3 matrix (9 values comma-separated)
+- `--projection-fov <degrees>` - Projection field of view in degrees
 - `--near <number>` - Camera near clipping plane (default: 0.1)
-- `--far <number>` - Camera far clipping plane (default: 1000)
-- `--no-sh` - Disable spherical harmonics
-- `-o, --output <path>` - Output file path (default: screenshot.png)
+- `--far <number>` - Camera far clipping plane (default: 100.0)
+- `--label` - Render settings label on top of the image
+- `--sh-degree <number>` - Override SH degree (0=off, 1-3=use specified degree)
+- `--reveal` - Reveal output file in Finder after rendering
 - `--port <number>` - Port for local server (default: 8765)
+
+### Configuration File
+
+You can use a JSON configuration file instead of command-line arguments:
+
+```json
+{
+  "splat": "./my-splat.spz",
+  "width": 1920,
+  "height": 1080,
+  "output": "render.png",
+  "background": [0, 0, 0, 1],
+  "cameraPosition": [0, 0, 5],
+  "cameraLookat": [0, 0, 0],
+  "projectionFov": 60,
+  "near": 0.1,
+  "far": 100.0
+}
+```
+
+Then run:
+
+```bash
+spark-screenshot --config config.json
+```
+
+CLI arguments override config file values.
 
 ### Examples
 
@@ -69,27 +102,22 @@ spark-screenshot --splat ./my-splat.ply
 
 Custom dimensions and camera:
 ```bash
-spark-screenshot --splat ./my-splat.ply --width 1920 --height 1080 --camera-position 0,2,-5 --camera-look-at 0,0,0
+spark-screenshot --splat ./my-splat.ply --width 1920 --height 1080 --camera-position 0,2,5 --camera-lookat 0,0,0
 ```
 
-Custom field of view:
+With label overlay:
 ```bash
-spark-screenshot --splat ./my-splat.ply --fov 45 --output wide-angle.png
+spark-screenshot --splat ./my-splat.ply --label --output labeled.png
 ```
 
-Disable spherical harmonics for simpler rendering:
+Using a config file with overrides:
 ```bash
-spark-screenshot --splat ./my-splat.ply --no-sh --output no-sh.png
+spark-screenshot --config render-config.json --width 2048 --output high-res.png
 ```
 
-Custom clipping planes:
+Reveal in Finder after rendering:
 ```bash
-spark-screenshot --splat ./my-splat.ply --near 0.5 --far 500
-```
-
-Full example with all options:
-```bash
-spark-screenshot --splat ./butterfly.spz --width 1920 --height 1080 --camera-position 0,0,-5 --camera-look-at 0,0,0 --fov 60 --near 0.1 --far 1000 --output ./renders/butterfly.png
+spark-screenshot --splat ./butterfly.spz --reveal
 ```
 
 ## Supported Formats
@@ -107,8 +135,9 @@ The tool supports all formats supported by sparkjs:
 2. Launches a headless browser using Puppeteer
 3. Loads the splat file using sparkjs/THREE.js
 4. Renders the scene with specified camera settings
-5. Captures a screenshot
-6. Saves to the specified output path
+5. Optionally adds a label overlay with render settings
+6. Captures a screenshot
+7. Saves to the specified output path
 
 ## Requirements
 

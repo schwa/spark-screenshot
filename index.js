@@ -3,9 +3,10 @@
 import { Command } from 'commander';
 import puppeteer from 'puppeteer';
 import { createServer } from 'http';
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { resolve, dirname, basename } from 'path';
 import { fileURLToPath } from 'url';
+import { execSync } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -16,47 +17,110 @@ program
   .name('spark-screenshot')
   .description('CLI tool for taking screenshots of 3D Gaussian Splatting renders using sparkjs')
   .version('1.0.0')
-  .requiredOption('-s, --splat <path>', 'Path to splat file')
-  .option('-w, --width <number>', 'Width of the screenshot', '1200')
-  .option('-h, --height <number>', 'Height of the screenshot', '800')
-  .option('-p, --camera-position <x,y,z>', 'Camera position', '0,0,5')
-  .option('-l, --camera-look-at <x,y,z>', 'Camera look-at target', '0,0,0')
-  .option('-f, --fov <number>', 'Vertical field of view in degrees', '75')
+  .option('--background <rgba>', 'Background color in RGBA format (e.g., 0,0,0,1 for black)', '0,0,0,1')
+  .option('--width <number>', 'Width of the output image', '1024')
+  .option('--height <number>', 'Height of the output image', '768')
+  .option('--output <path>', 'Output PNG file path', 'output.png')
+  .option('--model-position <x,y,z>', 'Model position in x,y,z format (e.g., 0,0,0)')
+  .option('--camera-position <x,y,z>', 'Camera position in x,y,z format (e.g., 0,0,1.5)')
+  .option('--camera-lookat <x,y,z>', 'Camera look-at target in x,y,z format (e.g., 0,0,0)')
+  .option('--camera-rotation <values>', 'Camera rotation as quaternion (x,y,z,w) or 3x3 matrix (9 values comma-separated)')
+  .option('--projection-fov <degrees>', 'Projection field of view in degrees')
   .option('--near <number>', 'Camera near clipping plane', '0.1')
-  .option('--far <number>', 'Camera far clipping plane', '1000')
-  .option('--no-sh', 'Disable spherical harmonics')
-  .option('--color-space <type>', 'Output color space: srgb or linear', 'srgb')
-  .option('-b, --background-color <r,g,b>', 'Background color as RGB values (0-255)', '0,0,0')
-  .option('-o, --output <path>', 'Output file path', 'screenshot.png')
+  .option('--far <number>', 'Camera far clipping plane', '100.0')
+  .option('--splat <path>', 'Path to splat file (.splat, .ply, .spz) to render')
+  .option('--config <path>', 'Path to JSON configuration file')
+  .option('--label', 'Render settings label on top of the image')
+  .option('--sh-degree <number>', 'Override SH degree (0=off, 1-3=use specified degree)')
+  .option('--reveal', 'Reveal output file in Finder after rendering')
   .option('--port <number>', 'Port for local server', '8765')
   .parse(process.argv);
 
-const options = program.opts();
+const cliOptions = program.opts();
 
-// Validate splat file exists
-const splatPath = resolve(options.splat);
+// Load config from file if specified
+let config = {
+  background: [0, 0, 0, 1],
+  width: 1024,
+  height: 768,
+  output: 'output.png',
+  modelPosition: null,
+  cameraPosition: null,
+  cameraLookat: null,
+  cameraRotation: null,
+  projectionFov: null,
+  near: 0.1,
+  far: 100.0,
+  splat: null
+};
+
+if (cliOptions.config) {
+  const configPath = resolve(cliOptions.config);
+  if (!existsSync(configPath)) {
+    console.error(`Error: Config file not found: ${configPath}`);
+    process.exit(1);
+  }
+  try {
+    const configData = JSON.parse(readFileSync(configPath, 'utf8'));
+    config = { ...config, ...configData };
+  } catch (error) {
+    console.error(`Error parsing config file: ${error.message}`);
+    process.exit(1);
+  }
+}
+
+// CLI flags override config values
+if (cliOptions.background !== '0,0,0,1') {
+  const parts = cliOptions.background.split(',').map(s => parseFloat(s.trim()));
+  if (parts.length === 4) {
+    config.background = parts;
+  }
+}
+if (cliOptions.width !== '1024') config.width = parseInt(cliOptions.width);
+if (cliOptions.height !== '768') config.height = parseInt(cliOptions.height);
+if (cliOptions.output !== 'output.png') config.output = cliOptions.output;
+if (cliOptions.modelPosition) {
+  const parts = cliOptions.modelPosition.split(',').map(s => parseFloat(s.trim()));
+  if (parts.length === 3) config.modelPosition = parts;
+}
+if (cliOptions.cameraPosition) {
+  const parts = cliOptions.cameraPosition.split(',').map(s => parseFloat(s.trim()));
+  if (parts.length === 3) config.cameraPosition = parts;
+}
+if (cliOptions.cameraLookat) {
+  const parts = cliOptions.cameraLookat.split(',').map(s => parseFloat(s.trim()));
+  if (parts.length === 3) config.cameraLookat = parts;
+}
+if (cliOptions.cameraRotation) {
+  const parts = cliOptions.cameraRotation.split(',').map(s => parseFloat(s.trim()));
+  config.cameraRotation = parts;
+}
+if (cliOptions.projectionFov) config.projectionFov = parseFloat(cliOptions.projectionFov);
+if (cliOptions.near !== '0.1') config.near = parseFloat(cliOptions.near);
+if (cliOptions.far !== '100.0') config.far = parseFloat(cliOptions.far);
+if (cliOptions.splat) config.splat = cliOptions.splat;
+
+// Validate splat file
+if (!config.splat) {
+  console.error('Error: Must specify a splat file with --splat or use --config');
+  process.exit(1);
+}
+
+const splatPath = resolve(config.splat);
 if (!existsSync(splatPath)) {
   console.error(`Error: Splat file not found: ${splatPath}`);
   process.exit(1);
 }
 
 // Parse numeric options
-const width = parseInt(options.width);
-const height = parseInt(options.height);
-const port = parseInt(options.port);
+const width = config.width;
+const height = config.height;
+const port = parseInt(cliOptions.port);
 
 if (isNaN(width) || isNaN(height) || width <= 0 || height <= 0) {
   console.error('Error: Width and height must be positive numbers');
   process.exit(1);
 }
-
-// Validate color space
-const validColorSpaces = ['srgb', 'linear'];
-if (!validColorSpaces.includes(options.colorSpace.toLowerCase())) {
-  console.error(`Error: Color space must be one of: ${validColorSpaces.join(', ')}`);
-  process.exit(1);
-}
-
 
 // Create a simple HTTP server to serve files
 const server = createServer((req, res) => {
@@ -118,7 +182,15 @@ server.listen(port, async () => {
     });
 
     // Build URL with parameters
-    const renderUrl = `http://localhost:${port}/?splat=${encodeURIComponent('http://localhost:' + port + '/splat')}&width=${width}&height=${height}&cameraPosition=${encodeURIComponent(options.cameraPosition)}&lookAt=${encodeURIComponent(options.cameraLookAt)}&fov=${options.fov}&near=${options.near}&far=${options.far}&noSh=${!options.sh}&colorSpace=${options.colorSpace.toLowerCase()}&backgroundColor=${encodeURIComponent(options.backgroundColor)}`;
+    // Convert config to URL params
+    const bgRgb = config.background.slice(0, 3).map(v => Math.round(v * 255)).join(',');
+    const cameraPos = config.cameraPosition ? config.cameraPosition.join(',') : '0,0,1.5';
+    const lookAt = config.cameraLookat ? config.cameraLookat.join(',') : '0,0,0';
+    const fov = config.projectionFov || 60;
+    const shDegree = cliOptions.shDegree ? parseInt(cliOptions.shDegree) : null;
+    const noSh = shDegree === 0;
+
+    const renderUrl = `http://localhost:${port}/?splat=${encodeURIComponent('http://localhost:' + port + '/splat')}&width=${width}&height=${height}&cameraPosition=${encodeURIComponent(cameraPos)}&lookAt=${encodeURIComponent(lookAt)}&fov=${fov}&near=${config.near}&far=${config.far}&noSh=${noSh}&backgroundColor=${encodeURIComponent(bgRgb)}`;
     await page.goto(renderUrl, { waitUntil: 'networkidle0' });
 
     // Wait for render to complete
@@ -133,14 +205,59 @@ server.listen(port, async () => {
       throw new Error(`Render error: ${renderError}`);
     }
 
+    // Get splat count from page if available
+    const splatCount = await page.evaluate(() => window.splatCount || 'unknown');
+
+    // Add label overlay if requested
+    if (cliOptions.label) {
+      const camPos = config.cameraPosition || [0, 0, 1.5];
+      const modelPos = config.modelPosition || [0, 0, 0];
+      const fovStr = (config.projectionFov || 60).toFixed(1) + '°';
+
+      const labelText = `Renderer: SparkJS
+Size: ${width}x${height} | FOV: ${fovStr}
+Splats: ${splatCount} | Near/Far: ${config.near}/${config.far}
+Camera: (${camPos[0].toFixed(2)}, ${camPos[1].toFixed(2)}, ${camPos[2].toFixed(2)})
+Model: (${modelPos[0].toFixed(2)}, ${modelPos[1].toFixed(2)}, ${modelPos[2].toFixed(2)})`;
+
+      await page.evaluate((text) => {
+        const label = document.createElement('div');
+        label.style.cssText = `
+          position: fixed;
+          bottom: 10px;
+          left: 10px;
+          background: rgba(0, 0, 0, 0.7);
+          color: white;
+          font-family: monospace;
+          font-size: 12px;
+          padding: 8px;
+          border-radius: 4px;
+          white-space: pre;
+          z-index: 10000;
+        `;
+        label.textContent = text;
+        document.body.appendChild(label);
+      }, labelText);
+    }
+
     // Take screenshot
+    const outputPath = resolve(config.output);
     await page.screenshot({
-      path: options.output,
+      path: outputPath,
       type: 'png'
     });
 
     await browser.close();
     server.close();
+
+    // Reveal in Finder if requested
+    if (cliOptions.reveal) {
+      try {
+        execSync(`open -R "${outputPath}"`);
+      } catch (e) {
+        // Ignore errors
+      }
+    }
 
     process.exit(0);
 
